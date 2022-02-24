@@ -216,7 +216,7 @@ sub run {
     # Install hana
     my @hdblcm_args = qw(--autostart=n --shell=/bin/sh --workergroup=default --system_usage=custom --batch
       --hostname=$(hostname) --db_mode=multiple_containers --db_isolation=low --restrict_max_mem=n
-      --userid=1001 --groupid=79 --use_master_password=n --skip_hostagent_calls=n --system_usage=production);
+      --userid=1001 --groupid=79 --use_master_password=n --skip_hostagent_calls=n --system_usage=production --ignore=check_signature_file);
     push @hdblcm_args,
       "--sid=$sid",
       "--number=$instid",
