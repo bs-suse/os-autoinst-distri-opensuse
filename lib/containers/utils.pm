@@ -20,8 +20,9 @@ use warnings;
 use version_utils;
 use Mojo::Util 'trim';
 
-our @EXPORT = qw(test_seccomp basic_container_tests get_vars can_build_sle_base
-  get_docker_version check_runtime_version container_ip registry_url);
+our @EXPORT = qw(test_seccomp runtime_smoke_tests basic_container_tests get_vars
+  can_build_sle_base get_docker_version check_runtime_version
+  container_ip container_route registry_url);
 
 sub test_seccomp {
     my $no_seccomp = script_run('docker info | tee /tmp/docker_info.txt | grep seccomp');
@@ -58,6 +59,13 @@ sub container_ip {
     return $ip;
 }
 
+sub container_route {
+    my ($container, $runtime) = @_;
+    my $route = script_output "$runtime inspect $container --format='{{.NetworkSettings.Gateway}}'";
+    record_info "container route", "$route";
+    return $route;
+}
+
 sub registry_url {
     my ($container_name, $version_tag) = @_;
     my $registry = trim(get_var('REGISTRY', 'docker.io'));
@@ -69,6 +77,48 @@ sub registry_url {
     return $registry unless $container_name;
     return sprintf("%s/%s", $repo, $container_name) unless $version_tag;
     return sprintf("%s/%s:%s", $repo, $container_name, $version_tag);
+}
+
+# This is simple and universal
+sub runtime_smoke_tests {
+    my %args = @_;
+    my $runtime = $args{runtime};
+    my $image = $args{image} // registry_url('alpine', '3.6');
+
+    record_info('Smoke', "Smoke test running image: $image on runtime: $runtime.");
+
+    # Pull image from registry
+    if ($runtime =~ /nerdctl/) {
+        assert_script_run("$runtime image pull --insecure-registry $image");
+    } else {
+        assert_script_run("$runtime pull $image");
+    }
+
+    # List locally available images
+    # if we miss $image the test will fail later
+    assert_script_run("$runtime image ls");
+
+    # crictl is not implemented as it needs a lot of additional settings just to run container
+    if ($runtime !~ /crictl/) {
+        # Run container in foreground
+        assert_script_run("$runtime run -it --rm $image echo 'Hello'");
+
+        # Run container in background - it can take few seconds
+        assert_script_run("$runtime run -d --name 'sleeper' $image sleep 999");
+        script_retry("$runtime ps | grep sleeper", delay => 5, retry => 6);
+
+        # Exec command in running container
+        assert_script_run("$runtime exec sleeper echo 'Hello'");
+
+        # Stop the container
+        assert_script_run("$runtime stop sleeper");
+
+        # Remove the container
+        assert_script_run("$runtime rm sleeper");
+    }
+
+    # Remove the image we pulled
+    assert_script_run("$runtime rmi $image");
 }
 
 sub basic_container_tests {
@@ -131,7 +181,6 @@ sub basic_container_tests {
     my $ret = script_run("$runtime container exec $container_name zypper -n in curl", 600);
     die('zypper inside container timed out') if (!defined($ret));
     if ($ret != 0) {
-        record_info('poo#40958 - curl install failure, try with force-resolution.');
         my $output = script_output("$runtime container exec $container_name zypper in --force-resolution -y -n curl", 600);
         die('error: curl not installed in the container') unless (($output =~ m/Installing: curl.*done/) || ($output =~ m/\'curl\' .* already installed/));
     }

@@ -123,6 +123,9 @@ sub run {
         results_dir => 'img_proof_results'
     );
 
+    # IP address of instance can change during img_proof (because of hard-reboot)
+    assert_script_run(sprintf('ssh-keyscan %s >> ~/.ssh/known_hosts', $instance->public_ip));
+
     upload_logs($img_proof->{logfile});
     parse_extra_log(IPA => $img_proof->{results});
     assert_script_run('rm -rf img_proof_results');
@@ -137,7 +140,7 @@ sub run {
             my $file = path(bmwqemu::result_dir(), $filename);
             my $json = Mojo::JSON::decode_json($file->slurp);
             next if ($json->{result} ne 'fail');
-            $instance->upload_log('/var/log/cloudregister');
+            $instance->upload_log('/var/log/cloudregister', log_name => 'cloudregister.log');
             last;
         }
         $instance->run_ssh_command(cmd => 'rpm -qa > /tmp/rpm_qa.txt', no_quote => 1);

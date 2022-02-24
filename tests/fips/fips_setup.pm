@@ -1,4 +1,4 @@
-# Copyright 2016-2019 SUSE LLC
+# Copyright 2016-2022 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Package: patterns-server-enterprise-fips
@@ -6,14 +6,15 @@
 #          Installation check - verify the setup of FIPS installation
 #          ENV mode - selected by FIPS_ENV_MODE
 #          Global mode - setup fips=1 in kernel command line
+#
 # Maintainer: Ben Chou <bchou@suse.com>
-# Tags: poo#39071
+# Tags: poo#39071, poo#105591, poo#105999
 
 use strict;
 use warnings;
 use base "consoletest";
 use testapi;
-use utils "zypper_call";
+use utils qw(quit_packagekit zypper_call);
 use bootloader_setup "add_grub_cmdline_settings";
 use power_action_utils "power_action";
 
@@ -27,6 +28,9 @@ sub run {
         assert_script_run("grep '^GRUB_CMDLINE_LINUX_DEFAULT.*fips=1' /etc/default/grub");
         assert_script_run("grep '^1\$' /proc/sys/crypto/fips_enabled");
         record_info 'Kernel Mode', 'FIPS kernel mode (for global) configured!';
+
+        # Stop packagekitd
+        quit_packagekit;
 
         # Make sure FIPS pattern is installed and there is no conflicts.
         zypper_call("refresh");
@@ -46,7 +50,7 @@ sub run {
     if (get_var("FIPS_ENV_MODE")) {
         die 'FIPS kernel mode is required for this test!' if check_var('SECURITY_TEST', 'crypt_kernel');
         zypper_call('in -t pattern fips');
-        foreach my $env ('OPENSSL_FIPS', 'OPENSSL_FORCE_FIPS_MODE', 'LIBGCRYPT_FORCE_FIPS_MODE', 'NSS_FIPS') {
+        foreach my $env ('OPENSSL_FIPS', 'OPENSSL_FORCE_FIPS_MODE', 'LIBGCRYPT_FORCE_FIPS_MODE', 'NSS_FIPS', 'GnuTLS_FORCE_FIPS_MODE') {
             assert_script_run "echo 'export $env=1' >> /etc/bash.bashrc";
         }
 

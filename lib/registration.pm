@@ -9,7 +9,7 @@ use strict;
 use warnings;
 use testapi;
 use Utils::Architectures;
-use utils qw(addon_decline_license assert_screen_with_soft_timeout zypper_call systemctl handle_untrusted_gpg_key quit_packagekit script_retry);
+use utils qw(addon_decline_license assert_screen_with_soft_timeout zypper_call systemctl handle_untrusted_gpg_key quit_packagekit script_retry wait_for_purge_kernels);
 use version_utils qw(is_sle is_sles4sap is_upgrade is_leap_migration is_sle_micro);
 use constant ADDONS_COUNT => 50;
 use y2_module_consoletest;
@@ -174,25 +174,29 @@ sub add_suseconnect_product {
     $version //= '${VERSION_ID}';
     $arch //= '${CPU}';
     $params //= '';
-    $retry //= 0;    # run SUSEConnect a 2nd time to workaround the gpg error due to missing repo key on 1st run
+    $retry //= 3;    # run SUSEConnect $retry times before failing
+    $timeout //= 300;
 
     # some modules on sle12 use major version e.g. containers module
     my $major_version = '$(echo ${VERSION_ID}|cut -c1-2)';
     $version = $major_version if $name eq 'sle-module-containers' && is_sle('<15');
+    record_info('SCC product', "Activating product $name");
 
-    my $result = script_run("SUSEConnect -p $name/$version/$arch $params", $timeout);
-    if ($result != 0 && $retry) {
-        if ($name =~ /PackageHub/) {
-            record_soft_failure 'bsc#1124318 - Fail to get module repo metadata - running the command again as a workaround';
-
+    my $try_cnt = 0;
+    while ($try_cnt++ < $retry) {
+        eval { assert_script_run("SUSEConnect -p $name/$version/$arch $params", timeout => $timeout); };
+        if ($@) {
+            record_info('retry', "SUSEConnect failed to activate the module $name. Retrying...");
+            sleep 60 * $try_cnt;    # we wait a bit longer for each retry
         }
-
-        my $fail_message = ($name =~ /PackageHub/ && check_var('BETA', '1')) ? "PackageHub installation might fail in early development" : undef;
-        assert_script_run("SUSEConnect -p $name/$version/$arch $params", $timeout, $fail_message);
-
-    } elsif ($result && !$retry) {
-        die "SUSEConnect failed activating module $name with exit code (see log output): $result.";
+        else {
+            return 1;
+        }
     }
+    if ($name =~ /PackageHub/ && check_var('BETA', '1')) {
+        record_info('INFO', 'PackageHub installation might fail in early development');
+    }
+    die "SUSEConnect failed activating module $name after $$retry retries.";
 }
 
 =head2 ssh_add_suseconnect_product
@@ -791,6 +795,13 @@ sub fill_in_reg_server {
         $regcode = $prdcode if ($prdcode);
     }
 
+    # rmt slp discovery, the smt server address will auto filled
+    # and selected. We do this kind of test on local openQA to avoid
+    # affecting the jobs on openqa.suse.de.
+    if (get_var('SLP_RMT_INSTALL')) {
+        wait_screen_change { send_key $cmd{next} };
+        return;
+    }
     if (!get_var("SMT_URL")) {
         if (is_sle('15+') && check_var('DESKTOP', 'textmode')) {
             send_key "alt-m";    # select email field if yast2 add-on
@@ -832,6 +843,7 @@ sub scc_deregistration {
     if (is_sle('12-SP1+', get_var($args{version_variable}))) {
         # Need quit packagekit to ensure it won't block to de-register system via SUSEConnect.
         quit_packagekit;
+        wait_for_purge_kernels;
         assert_script_run('SUSEConnect --version');
         my $deregister_ret = script_run('SUSEConnect --de-register --debug > /tmp/SUSEConnect.debug 2>&1', 300);
         if (defined $deregister_ret and $deregister_ret == 104) {

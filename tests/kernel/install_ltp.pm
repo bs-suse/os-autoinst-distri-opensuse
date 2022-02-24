@@ -67,7 +67,9 @@ sub install_runtime_dependencies {
       bc
       binutils
       dosfstools
+      e2fsprogs
       evmctl
+      exfat-utils
       fuse-exfat
       kernel-default-extra
       lvm2
@@ -84,7 +86,8 @@ sub install_runtime_dependencies {
       xfsprogs
     );
     for my $dep (@maybe_deps) {
-        script_run('zypper -n -t in ' . $dep . ' | tee');
+        # ignore failures due to missing packages (exit code 104)
+        zypper_call("in $dep", exitcode => [0, 104]);
     }
 }
 
@@ -96,7 +99,8 @@ sub install_debugging_tools {
       strace
     );
     for my $dep (@maybe_deps) {
-        script_run('zypper -n -t in ' . $dep . ' | tee');
+        # ignore failures due to missing packages (exit code 104)
+        zypper_call("in $dep", exitcode => [0, 104]);
     }
 }
 
@@ -125,7 +129,8 @@ sub install_runtime_dependencies_network {
       xinetd
     );
     for my $dep (@maybe_deps) {
-        script_run('zypper -n -t in ' . $dep . ' | tee');
+        # ignore failures due to missing packages (exit code 104)
+        zypper_call("in $dep", exitcode => [0, 104]);
     }
 }
 
@@ -160,12 +165,17 @@ sub install_build_dependencies {
       libmnl-devel
       libnuma-devel
       libnuma-devel-32bit
-      libopenssl-devel-32bit
       libselinux-devel-32bit
       libtirpc-devel-32bit
     );
+
+    # libopenssl-devel-32bit is blocked by dependency mess on SLE-12 and we
+    # don't use it anyway...
+    push @maybe_deps, 'libopenssl-devel-32bit' if !is_sle('<15');
+
     for my $dep (@maybe_deps) {
-        script_run('zypper -n -t in ' . $dep . ' | tee');
+        # ignore failures due to missing packages (exit code 104)
+        zypper_call("in $dep", exitcode => [0, 104]);
     }
 }
 

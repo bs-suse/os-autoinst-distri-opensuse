@@ -15,6 +15,7 @@ use testapi;
 use YuiRestClient;
 
 sub run {
+    die 'Module requires YUI_REST_API variable to be set.', unless get_var('YUI_REST_API');
     my $app = YuiRestClient::get_app(installation => 1, timeout => 120, interval => 1);
     my $port = $app->get_port();
     record_info('SERVER', "Used host for libyui: " . $app->get_host());
@@ -25,10 +26,6 @@ sub run {
         if (is_s390x) {
             if (is_svirt) {
                 $cmd = 'TERM=linux ';
-            }
-            elsif (get_var('BACKEND') eq 's390x') {
-                $cmd = 'QT_XCB_GL_INTEGRATION=none ';
-                record_soft_failure('bsc#1142040');
             }
         }
         $cmd .= YuiRestClient::get_yui_params_string($port) . " yast.ssh";

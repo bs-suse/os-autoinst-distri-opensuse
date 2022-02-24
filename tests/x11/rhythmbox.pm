@@ -12,6 +12,8 @@ use base "x11test";
 use strict;
 use warnings;
 use testapi;
+use utils "zypper_call";
+use x11utils 'start_root_shell_in_xterm';
 
 sub run {
     x11_start_program('rhythmbox');

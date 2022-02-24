@@ -1,4 +1,4 @@
-# Copyright 2015-2021 SUSE LLC
+# Copyright 2015-2022 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 package utils;
@@ -11,7 +11,7 @@ use warnings;
 use testapi qw(is_serial_terminal :DEFAULT);
 use lockapi 'mutex_wait';
 use mm_network;
-use version_utils qw(is_microos is_leap is_sle is_sle12_hdd_in_upgrade is_storage_ng is_jeos package_version_cmp);
+use version_utils qw(is_microos is_leap is_public_cloud is_sle is_sle12_hdd_in_upgrade is_storage_ng is_jeos package_version_cmp);
 use Utils::Architectures;
 use Utils::Systemd qw(systemctl disable_and_stop_service);
 use Utils::Backends;
@@ -47,6 +47,7 @@ our @EXPORT = qw(
   set_bridged_networking
   assert_screen_with_soft_timeout
   quit_packagekit
+  wait_for_purge_kernels
   systemctl
   addon_decline_license
   addon_license
@@ -679,8 +680,13 @@ sub fully_patch_system {
     # Repeatedly call zypper patch until it returns something other than 103 (package manager updates)
     my $ret = 1;
     for (1 .. 3) {
-        $ret = zypper_call('patch --with-interactive -l', exitcode => [0, 4, 102, 103], timeout => 6000);
+        $ret = zypper_call('patch --with-interactive -l|tee zypper.log', exitcode => [0, 4, 8, 102, 103], timeout => 6000);
         last if $ret != 103;
+    }
+
+    if ($ret == 8 && script_run('grep -Ez "python3(6?)-pip.*(SLES:12-SP5|cloud:12).*conflicts with.*python3(6?)-pip" zypper.log') == 0) {
+        record_soft_failure 'bsc#1195351 - python3 vs python36 in SLE12 SP5 has file conflicts on /usr/bin/pip3';
+        $ret = zypper_call('patch --replacefiles --with-interactive -l', exitcode => [0, 102, 103], timeout => 3000);
     }
 
     if (($ret == 4) && is_sle('>=12') && is_sle('<15')) {
@@ -705,11 +711,21 @@ the second run will update the system.
 =cut
 sub ssh_fully_patch_system {
     my $remote = shift;
+
+    my $cmd_time = time();
     # first run, possible update of packager -- exit code 103
     my $ret = script_run("ssh $remote 'sudo zypper -n patch --with-interactive -l'", 1500);
-    die "Zypper failed with $ret" if ($ret != 0 && $ret != 102 && $ret != 103);
+    record_info('zypper patch', 'The command zypper patch took ' . (time() - $cmd_time) . ' seconds.');
+    if (is_sle('=12-SP5') && $ret == 8) {
+        record_soft_failure 'bsc#1195351 - python3 vs python36 in SLE12 SP5 has file conflicts on /usr/bin/pip3';
+        $ret = script_run("ssh $remote 'sudo zypper -n patch --replacefiles --with-interactive -l'", 1500);
+    }
+    die "Zypper failed with $ret" if ($ret != 0 && $ret != 8 && $ret != 102 && $ret != 103);
+
+    $cmd_time = time();
     # second run, full system update
     $ret = script_run("ssh $remote 'sudo zypper -n patch --with-interactive -l'", 6000);
+    record_info('zypper patch', 'The second command zypper patch took ' . (time() - $cmd_time) . ' seconds.');
     die "Zypper failed with $ret" if ($ret != 0 && $ret != 102);
 }
 
@@ -976,6 +992,18 @@ sub quit_packagekit {
     script_run("systemctl mask packagekit; systemctl stop packagekit; while pgrep packagekitd; do sleep 1; done");
 }
 
+=head2 wait_for_purge_kernels
+
+ wait_for_purge_kernels();
+
+Wait until purge-kernels is done
+Prevent RPM lock e.g. SUSEConnect fail
+
+=cut
+sub wait_for_purge_kernels {
+    script_run('while pgrep purge-kernels; do sleep 1; done');
+}
+
 =head2 addon_decline_license
 
  addon_decline_license();
@@ -1235,7 +1263,8 @@ sub ensure_serialdev_permissions {
     else {
         # when serial getty is started, it changes the group of serialdev from dialout to tty (but doesn't change it back when stopped)
         # let's make sure that both will work
-        assert_script_run "chown $testapi::username /dev/$testapi::serialdev && usermod -a -G tty,dialout,\$(stat -c %G /dev/$testapi::serialdev) $testapi::username";
+        # based on bsc#1195620, let's restore file permission to '620'
+        assert_script_run "chmod 620 /dev/$testapi::serialdev && chown $testapi::username /dev/$testapi::serialdev && usermod -a -G tty,dialout,\$(stat -c %G /dev/$testapi::serialdev) $testapi::username";
     }
 }
 
@@ -1502,7 +1531,11 @@ sub show_tasks_in_blocked_state {
         send_key 'alt-sysrq-w';
         # info will be sent to serial tty
         wait_serial(qr/sysrq\s*:\s+show\s+blocked\s+state/i);
-        send_key 'ret';    # ensure clean shell prompt
+
+        # If the 'An error occured during the installation.' OK popup has popped up,
+        # do not press the 'return' key, because it will result in all ttys logging out.
+        send_key 'ret' unless (check_screen 'linuxrc-install-fail');
+
     }
 }
 
@@ -1960,10 +1993,14 @@ sub install_patterns {
     for my $pt (@pt_list) {
         # if pattern is set default, skip
         next if ($pt =~ /default/);
+        # For Public cloud module test we need skip Instance pattern if outside of public cloud images.
+        next if (($pt =~ /Instance/) && !is_public_cloud);
         # Cloud patterns are conflict by each other, only install cloud pattern from single vender.
         if ($pt =~ /$pcm_list/) {
             next unless $pcm == 0;
-            $pt .= '*';
+            # For Public cloud module test we need install 'Tools' but not 'Instance' pattern if outside of public cloud images.
+            next if (($pt !~ /Tools/) && !is_public_cloud);
+            $pt .= '*' if (is_public_cloud);
             $pcm = 1;
         }
         # Only one CFEngine pattern can be installed
@@ -1980,6 +2017,8 @@ sub install_patterns {
         if (($pt =~ /sap_server/) && is_sle('=11-SP4')) {
             next;
         }
+        # For Public cloud module test we need install 'Tools' but not 'Instance' pattern if outside of public cloud images.
+        next if (($pt =~ /OpenStack/) && ($pt !~ /Tools/) && !is_public_cloud);
         # if pattern is common-criteria and PATTERNS is all, skip, poo#73645
         next if (($pt =~ /common-criteria/) && check_var('PATTERNS', 'all'));
         zypper_call("in -t pattern $pt", timeout => 1800);

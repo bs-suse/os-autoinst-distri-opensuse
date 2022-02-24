@@ -13,6 +13,8 @@ use Carp 'croak';
 use Mojo::Base -base;
 use Mojo::Util 'trim';
 use File::Basename;
+use publiccloud::utils;
+use version_utils;
 
 use constant SSH_TIMEOUT => 90;
 
@@ -75,8 +77,6 @@ sub run_ssh_command {
     } elsif ($rc_only) {
         # Increase the hard timeout for script_run, otherwise our 'timeout $args{timeout} ...' has no effect
         $args{timeout} += 2;
-        # Pipe both the standard and error output serial for debug purposes
-        $ssh_cmd .= " >/dev/$serialdev 2>&1";
         $args{quiet} = 0;
         $args{die_on_timeout} = 1;
         # Run the command and return only the returncode here
@@ -167,6 +167,7 @@ wait till guestregister is ready. If guestregister finish with state failed,
 a soft-failure will be recorded.
 If guestregister will not finish within C<timeout> seconds, job dies.
 In case of BYOS images we checking that service is inactive and quit
+Returns the time needed to wait for the guestregister to complete.
 =cut
 sub wait_for_guestregister
 {
@@ -175,22 +176,33 @@ sub wait_for_guestregister
     my $start_time = time();
     my $last_info = 0;
 
+    # Check what version of registercloudguest binary we use
+    $self->run_ssh_command(cmd => "sudo rpm -qa cloud-regionsrv-client", proceed_on_failure => 1);
+
     while (time() - $start_time < $args{timeout}) {
         my $out = $self->run_ssh_command(cmd => 'sudo systemctl is-active guestregister', proceed_on_failure => 1, quiet => 1);
+        # guestregister is expected to be inactive because it runs only once
         if ($out eq 'inactive') {
+            $self->upload_log('/var/log/cloudregister', log_name => $autotest::current_test->{name} . '-cloudregister.log');
             return time() - $start_time;
-        }
-        if ($out eq 'failed') {
+        } elsif ($out eq 'failed') {
+            $self->upload_log('/var/log/cloudregister', log_name => $autotest::current_test->{name} . '-cloudregister.log');
             $out = $self->run_ssh_command(cmd => 'sudo systemctl status guestregister', proceed_on_failure => 1, quiet => 1);
-            record_soft_failure("guestregister failed:\n\n" . $out);
+            record_info("guestregister failed", $out, result => 'fail');
+            record_soft_failure("bsc#1195156");
             return time() - $start_time;
+        } elsif ($out eq 'active') {
+            $self->upload_log('/var/log/cloudregister', log_name => $autotest::current_test->{name} . '-cloudregister.log');
+            die "guestregister should not be active on BYOS" if (is_byos);
         }
+
         if (time() - $last_info > 10) {
             record_info('WAIT', 'Wait for guest register: ' . $out);
             $last_info = time();
         }
         sleep 1;
     }
+    $self->upload_log('/var/log/cloudregister', log_name => $autotest::current_test->{name} . '-cloudregister.log');
     die('guestregister didn\'t end in expected timeout=' . $args{timeout});
 }
 
@@ -216,8 +228,14 @@ sub wait_for_ssh
         if ($check_port) {
             $check_port = 0 if (script_run('nc -vz -w 1 ' . $self->{public_ip} . ' 22', quiet => 1) == 0);
         }
-        elsif ($self->run_ssh_command(cmd => 'sudo journalctl -b | grep -E "Reached target (Cloud-init|Default|Main User Target)"', proceed_on_failure => 1, quiet => 1, username => $args{username}) =~ m/Reached target.*/) {
-            return $duration;
+        else {
+            my $output = $self->run_ssh_command(cmd => 'sudo journalctl -b | grep -E "Reached target (Cloud-init|Default|Main User Target)"', proceed_on_failure => 1, username => $args{username});
+            if ($output =~ m/Reached target.*/) {
+                return $duration;
+            }
+            elsif ($output =~ m/Permission denied (publickey).*/) {
+                die "ssh permission denied (pubkey)";
+            }
         }
         sleep 1;
     }
@@ -306,6 +324,23 @@ sub get_state
 {
     my $self = shift;
     return $self->provider->get_state_from_instance($self, @_);
+}
+
+=head2 network_speed_test
+
+    network_speed_test();
+
+Test the network speed.
+=cut
+sub network_speed_test() {
+    my ($self, %args) = @_;
+    # Curl stats output format
+    my $write_out = 'time_namelookup:\t%{time_namelookup} s\ntime_connect:\t\t%{time_connect} s\ntime_appconnect:\t%{time_appconnect} s\ntime_pretransfer:\t%{time_pretransfer} s\ntime_redirect:\t\t%{time_redirect} s\ntime_starttransfer:\t%{time_starttransfer} s\ntime_total:\t\t%{time_total} s\n';
+    # PC RMT server domain name
+    my $rmt_host = "smt-" . lc(get_required_var('PUBLIC_CLOUD_PROVIDER')) . ".susecloud.net";
+    $self->run_ssh_command(cmd => "grep \"$rmt_host\" /etc/hosts", proceed_on_failure => 1);
+    record_info("ping 1.1.1.1", $self->run_ssh_command(cmd => "ping -c30 1.1.1.1", proceed_on_failure => 1, timeout => 600));
+    record_info("curl $rmt_host", $self->run_ssh_command(cmd => "curl -w '$write_out' -o /dev/null -v https://$rmt_host/", proceed_on_failure => 1));
 }
 
 1;

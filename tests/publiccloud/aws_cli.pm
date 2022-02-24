@@ -11,10 +11,11 @@
 # Maintainer: qa-c team <qa-c@suse.de>
 
 use Mojo::Base 'publiccloud::basetest';
-use registration;
 use testapi;
-use mmapi;
-use utils;
+use mmapi 'get_current_job_id';
+use utils qw(zypper_call script_retry);
+use version_utils 'is_sle';
+use registration qw(add_suseconnect_product get_addon_fullname);
 use publiccloud::utils "select_host_console";
 
 sub run {
@@ -24,7 +25,8 @@ sub run {
 
     # If 'aws' is preinstalled, we test that version
     if (script_run("which aws") != 0) {
-        add_suseconnect_product 'sle-module-public-cloud';
+        add_suseconnect_product(get_addon_fullname('pcm'), (is_sle('=12-sp5') ? '12' : undef));
+        add_suseconnect_product(get_addon_fullname('phub')) if is_sle('=12-sp5');
         zypper_call 'in aws-cli jq';
     }
 
@@ -46,6 +48,9 @@ sub run {
     assert_script_run($run_instances, 240);
     assert_script_run("aws ec2 describe-instances --filters 'Name=tag:openqa-cli-test-tag,Values=$job_id'", 90);
     my $instance_id = script_output("aws ec2 describe-instances --filters 'Name=tag:openqa-cli-test-tag,Values=$job_id' --output=text --query 'Reservations[*].Instances[*].InstanceId'", 90);
+
+    # Wait until the instance is really running
+    script_retry("aws ec2 describe-instances --instance-ids $instance_id --query 'Reservations[*].Instances[*].State.Name' --output text | grep 'running'", 90, delay => 15, retry => 12);
 
     # Check that the machine is reachable via ssh
     my $ip_address = script_output("aws ec2 describe-instances --instance-ids $instance_id --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", 90);

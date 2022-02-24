@@ -15,7 +15,7 @@ use Time::HiRes 'sleep';
 use testapi;
 use Utils::Architectures;
 use utils;
-use version_utils qw(is_microos is_sle_micro is_jeos is_leap is_sle is_tumbleweed);
+use version_utils qw(is_microos is_sle_micro is_jeos is_leap is_sle is_tumbleweed is_selfinstall);
 use mm_network;
 use Utils::Backends;
 
@@ -265,6 +265,8 @@ sub boot_local_disk {
 sub boot_into_snapshot {
     send_key_until_needlematch('boot-menu-snapshot', 'down', 10, 5);
     send_key 'ret';
+    # assert needle to make sure grub2 page show up
+    assert_screen('grub2-page', 60);
     # assert needle to avoid send down key early in grub_test_snapshot.
     if (get_var('OFW') || is_pvm || check_var('SLE_PRODUCT', 'hpc')) {
         send_key_until_needlematch('snap-default', 'down', 60, 5);
@@ -451,10 +453,10 @@ sub bootmenu_default_params {
     }
     else {
         # On JeOS and MicroOS we don't have YaST installer.
-        push @params, "Y2DEBUG=1" unless is_jeos || is_microos;
+        push @params, "Y2DEBUG=1" unless is_jeos || is_microos || is_selfinstall;
 
         # gfxpayload variable replaced vga option in grub2
-        if (!is_jeos && !is_microos && (is_i586 || is_x86_64)) {
+        if (!is_jeos && !is_microos && !is_selfinstall && (is_i586 || is_x86_64)) {
             push @params, "vga=791";
             my $video = 'video=1024x768';
             $video .= '-16' if check_var('QEMUVGA', 'cirrus');
@@ -464,7 +466,7 @@ sub bootmenu_default_params {
     }
 
     if (!get_var("NICEVIDEO")) {
-        if (is_microos) {
+        if (is_microos || is_selfinstall) {
             push @params, get_bootmenu_console_params $args{baud_rate};
         }
         elsif (!is_jeos) {

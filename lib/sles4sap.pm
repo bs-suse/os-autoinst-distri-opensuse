@@ -300,7 +300,7 @@ sub prepare_profile {
 
     if ($has_saptune) {
         assert_script_run "saptune daemon start";
-        my $ret = script_run "saptune solution verify $profile";
+        my $ret = script_run("saptune solution verify $profile", die_on_timeout => 0);
         if (!defined $ret) {
             # Command timed out. 'saptune daemon start' could have caused the SUT to
             # move out of root-console, so select root-console and try again
@@ -690,7 +690,9 @@ sub reboot {
 
     if (is_ipmi) {
         power_action('reboot', textmode => 1, keepconsole => 1);
+        # wait to not assert linux-login while system goes down
         switch_from_ssh_to_sol_console;
+        wait_still_screen(30);
         $self->wait_boot(textmode => 1, nologin => get_var('NOAUTOLOGIN', '0'));
     }
     else {

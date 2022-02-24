@@ -569,36 +569,46 @@ sub load_system_role_tests {
     }
 }
 sub load_jeos_tests {
-    if ((is_arm || is_aarch64) && is_opensuse()) {
-        # Enable jeos-firstboot, due to boo#1020019
+    if (get_var('JEOS_OPENSTACK')) {
+        loadtest 'boot/boot_to_desktop';
+        if (get_var('JEOS_OPENSTACK_UPLOAD_IMG')) {
+            loadtest "publiccloud/upload_image";
+        }
+        elsif (get_var('JEOS_OPENSTACK_CHECK_BOOT')) {
+            loadtest "jeos/openstack_check_boot";
+        }
+    } else {
+        if ((is_arm || is_aarch64) && is_opensuse()) {
+            # Enable jeos-firstboot, due to boo#1020019
+            load_boot_tests();
+            loadtest "jeos/prepare_firstboot";
+        }
         load_boot_tests();
-        loadtest "jeos/prepare_firstboot";
-    }
-    load_boot_tests();
-    loadtest "jeos/firstrun";
-    loadtest "jeos/record_machine_id";
-    loadtest "console/system_prepare" if is_sle;
-    loadtest "console/force_scheduled_tasks";
-    unless (get_var('INSTALL_LTP')) {
-        loadtest "jeos/grub2_gfxmode";
-        loadtest "jeos/diskusage";
-        loadtest "jeos/build_key";
-        loadtest "console/prjconf_excluded_rpms";
-    }
-    unless (get_var('CONTAINER_RUNTIME')) {
-        loadtest "console/journal_check";
-        loadtest "microos/libzypp_config";
-    }
-    if (is_sle) {
-        loadtest "console/suseconnect_scc";
-        loadtest "jeos/efi_tid" if (get_var('UEFI') && is_sle('=12-sp5'));
-    }
+        loadtest "jeos/firstrun";
+        loadtest "jeos/record_machine_id";
+        loadtest "console/system_prepare" if is_sle;
+        loadtest "console/force_scheduled_tasks";
+        unless (get_var('INSTALL_LTP')) {
+            loadtest "jeos/grub2_gfxmode";
+            loadtest "jeos/diskusage";
+            loadtest "jeos/build_key";
+            loadtest "console/prjconf_excluded_rpms";
+        }
+        unless (get_var('CONTAINER_RUNTIME')) {
+            loadtest "console/journal_check";
+            loadtest "microos/libzypp_config";
+        }
+        if (is_sle) {
+            loadtest "console/suseconnect_scc";
+            loadtest "jeos/efi_tid" if (get_var('UEFI') && is_sle('=12-sp5'));
+        }
 
-    loadtest 'qa_automation/patch_and_reboot' if is_updates_tests;
-    replace_opensuse_repos_tests if is_repo_replacement_required;
-    loadtest 'console/verify_efi_mok' if get_var 'CHECK_MOK_IMPORT';
-    # zypper_ref needs to run on jeos-containers. the is_sle is required otherwise is scheduled twice on o3
-    loadtest "console/zypper_ref" if (get_var('CONTAINER_RUNTIME') && is_sle);
+        loadtest 'qa_automation/patch_and_reboot' if is_updates_tests;
+        replace_opensuse_repos_tests if is_repo_replacement_required;
+        loadtest 'console/verify_efi_mok' if get_var 'CHECK_MOK_IMPORT';
+        # zypper_ref needs to run on jeos-containers. the is_sle is required otherwise is scheduled twice on o3
+        loadtest "console/zypper_ref" if (get_var('CONTAINER_RUNTIME') && is_sle);
+    }
 }
 
 sub installzdupstep_is_applicable {
@@ -997,9 +1007,6 @@ sub load_inst_tests {
                 loadtest "installation/user_settings";
             }    # sles4sap wizard installation doesn't have user_settings step
         }
-        elsif (get_var('IMPORT_USER_DATA')) {
-            loadtest 'installation/user_import';
-        }
         elsif (is_microos) {
             loadtest "installation/ntp_config_settings";
         } else {
@@ -1103,8 +1110,6 @@ sub load_consoletests {
     loadtest "console/prepare_test_data";
     loadtest "console/consoletest_setup";
     loadtest 'console/integration_services' if is_hyperv || is_vmware;
-    # This is a temporary solution for enabling open-vm-tools tests, will use YAML job template instead.
-    loadtest 'virt_autotest/esxi_open_vm_tools' if is_vmware && get_var('OPEN_VM_TOOLS');
 
     if (get_var('IBM_TESTS')) {
         # prepare tarballs for the testcase
@@ -1153,7 +1158,7 @@ sub load_consoletests {
     loadtest "console/check_system_info" if (is_sle && (get_var('SCC_ADDONS') !~ /ha/) && !is_sles4sap && (is_upgrade || get_var('MEDIA_UPGRADE')));
     # Enable installation repo from the usb, unless we boot from USB, but don't use it
     # for the installation, like in case of LiveCDs and when using http/smb/ftp mirror
-    if (check_var('USBBOOT', 1) && !is_livecd && !get_var('NETBOOT')) {
+    if (check_var('USBBOOT', 1) && !(is_jeos || is_livecd) && !get_var('NETBOOT')) {
         loadtest 'console/enable_usb_repo';
     }
 
@@ -1246,6 +1251,7 @@ sub load_consoletests {
     if (check_var_array('SCC_ADDONS', 'tcm') && get_var('PATTERNS') && is_sle('<15') && !get_var("MEDIA_UPGRADE")) {
         loadtest "feature/feature_console/deregister";
     }
+    loadtest "console/nginx" if ((is_opensuse && !is_staging) || is_sle('15+'));
     loadtest 'console/orphaned_packages_check' if is_jeos || get_var('UPGRADE') || get_var('ZDUP') || !is_sle('<12-SP4');
     loadtest "console/consoletest_finish";
 }
@@ -2381,6 +2387,8 @@ sub load_security_tests_selinux {
     loadtest "security/selinux/restorecon";
     loadtest "security/selinux/chcon";
     loadtest "security/selinux/chcat";
+    loadtest "security/selinux/set_get_enforce";
+    loadtest "security/selinux/selinuxexeccon";
 }
 
 sub load_security_tests_cc_audit_test {
@@ -2739,7 +2747,12 @@ sub load_hypervisor_tests {
     }
 
     if (check_var('VIRT_PART', 'hotplugging')) {
-        loadtest 'virtualization/universal/hotplugging';    # Try to change properties of guests
+        loadtest 'virtualization/universal/hotplugging_guest_preparation';    # Prepare guests
+        loadtest 'virtualization/universal/hotplugging_network_interfaces';    # Virtual network hotplugging
+        loadtest 'virtualization/universal/hotplugging_HDD';    # Virtual block device hotplugging
+        loadtest 'virtualization/universal/hotplugging_vCPUs';    # Add and remove guests vCPU
+        loadtest 'virtualization/universal/hotplugging_memory';    # Live memory change of guests
+        loadtest 'virtualization/universal/hotplugging_cleanup';    # Restore guests properties
     }
 
     if (check_var('VIRT_PART', 'networking')) {

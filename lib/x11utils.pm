@@ -131,6 +131,11 @@ sub ensure_unlocked_desktop {
         if ((match_has_tag 'displaymanager-password-prompt') || (match_has_tag 'screenlock-password')) {
             if ($password ne '') {
                 type_password;
+                # poo#97556
+                if (check_var('DESKTOP', 'minimalx')) {
+                    send_key 'ret';
+                    wait_still_screen;
+                }
                 assert_screen([qw(locked_screen-typed_password login_screen-typed_password generic-desktop)], timeout => 150);
                 next if match_has_tag 'generic-desktop';
             }
@@ -193,7 +198,12 @@ sub handle_additional_polkit_windows {
         # for S390x testing, since they are not using qemu built-in vnc, it is
         # expected that polkit authentication window can open for first time login.
         # see bsc#1177446 for more information.
-        record_soft_failure 'bsc#1192992 - multiple authentication due to repositories refresh on s390x';
+        # Base latest feedback of bsc#1192992,authentication should never open if is_sle  >= 15SP4
+        if (is_sle('>=15-sp4')) {
+            record_soft_failure 'bsc#1192992 - authentication should never open if is_sle >= 15SP4';
+        } else {
+            record_info('authentication open for first time login');
+        }
         wait_still_screen(5);
         my $counter = 5;
         while (check_screen('authentication-required-user-settings', 10) && $counter) {
@@ -201,6 +211,9 @@ sub handle_additional_polkit_windows {
             send_key 'ret';
             wait_still_screen(2, 4);
             $counter--;
+            if ($counter < 4) {
+                record_soft_failure 'bsc#1192992 - multiple authentication due to repositories refresh on s390x';
+            }
         }
     }
     if (match_has_tag('authentication-required-modify-system')) {
@@ -394,7 +407,7 @@ Disable screensaver in gnome. To be called from a command prompt, for example an
 
 =cut
 sub turn_off_gnome_screensaver {
-    script_run 'gsettings set org.gnome.desktop.session idle-delay 0';
+    script_run 'gsettings set org.gnome.desktop.session idle-delay 0', die_on_timeout => 0, timeout => 90;
 }
 
 =head2 turn_off_gnome_screensaver_for_gdm
