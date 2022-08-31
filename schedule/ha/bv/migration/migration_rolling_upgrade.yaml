@@ -44,6 +44,7 @@ vars:
   QEMU_DISABLE_SNAPSHOTS: '1'
   SCC_REGISTER: 'installation'
   SCC_URL: 'https://scc.suse.com'
+  SCC_PROXY_URL: 'http://all-%BUILD%.proxy.scc.suse.de'
   TIMEOUT_SCALE: '2'
   # Defined that we are in a upgrade scenario, service pack migration to another.
   UPDATE_TYPE: 'upgrade'
@@ -80,6 +81,7 @@ schedule:
   - ha/await_upgrade_or_update
   - migration/version_switch_upgrade_target
   - ha/cluster_state_mgmt
+  - migration/online_migration/pre_migration
   - migration/online_migration/zypper_migration
   - migration/online_migration/post_migration
   - ha/check_cluster_integrity
