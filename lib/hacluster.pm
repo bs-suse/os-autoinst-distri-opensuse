@@ -418,7 +418,7 @@ sub ensure_resource_running {
     my $starttime = time;
     my $ret = undef;
 
-    while ($ret = script_run("grep -E -q '$regex' <(crm resource status $rsc)", $default_timeout)) {
+    while ($ret = script_run("grep -E -q '$regex' <(yes | crm resource status $rsc)", $default_timeout)) {
         my $timerun = time - $starttime;
         if ($timerun < $default_timeout) {
             sleep 5;
@@ -537,7 +537,7 @@ Execute a C<crm resource cleanup> on the resource identified by B<$resource>.
 sub rsc_cleanup {
     my $rsc = shift;
 
-    assert_script_run "crm resource cleanup $rsc";
+    assert_script_run "yes | crm resource cleanup $rsc";
 
     my $ret = script_run "crm_mon -1 2>/dev/null | grep -Eq \"$rsc.*'not configured'|$rsc.*exit\"";
     if (defined $ret and $ret == 0) {
@@ -579,7 +579,7 @@ sub ha_export_logs {
     upload_logs("$bootstrap_log", failok => 1);
     upload_logs("$hb_log.tar.bz2", failok => 1);
 
-    script_run "crm configure show > /tmp/crm.txt";
+    script_run "yes | crm configure show > /tmp/crm.txt";
     upload_logs('/tmp/crm.txt');
 
     # Extract YaST logs and upload them
@@ -641,7 +641,7 @@ sub check_cluster_state {
     $cmd->("$crm_mon_cmd | grep -i 'no inactive resources'") if is_sle '12-sp3+';
     $cmd->('crm_mon -1 | grep \'partition with quorum\'');
     # In older versions, node names in crm node list output are followed by ": normal". In newer ones by ": member"
-    $cmd->(q/crm_mon -s | grep "$(crm node list | grep -E -c ': member|: normal') nodes online"/);
+    $cmd->(q/crm_mon -s | grep "$(yes | crm node list | grep -E -c ': member|: normal') nodes online"/);
     # As some options may be deprecated, test shouldn't die on 'crm_verify'
     if (get_var('HDDVERSION')) {
         script_run 'crm_verify -LV';
@@ -702,7 +702,7 @@ setting. Croaks on timeout.
 # If changing this, remember to also change wait_until_resources_started in tests/publiccloud/sles4sap.pm
 sub wait_until_resources_started {
     my %args = @_;
-    my @cmds = ('crm cluster wait_for_startup');
+    my @cmds = ('yes | crm cluster wait_for_startup');
     my $timeout = bmwqemu::scale_timeout($args{timeout} // 120);
     my $ret = undef;
 
@@ -884,8 +884,8 @@ primitive could work as well.
 sub add_lock_mgr {
     my ($lock_mgr) = @_;
 
-    assert_script_run "EDITOR=\"sed -ie '\$ a primitive $lock_mgr ocf:heartbeat:$lock_mgr'\" crm configure edit";
-    assert_script_run "EDITOR=\"sed -ie 's/^\\(group base-group.*\\)/\\1 $lock_mgr/'\" crm configure edit";
+    assert_script_run "EDITOR=\"sed -ie '\$ a primitive $lock_mgr ocf:heartbeat:$lock_mgr'\" yes | crm configure edit";
+    assert_script_run "EDITOR=\"sed -ie 's/^\\(group base-group.*\\)/\\1 $lock_mgr/'\" yes | crm configure edit";
 
     # Wait to get clvmd/lvmlockd running on all nodes
     sleep 5;

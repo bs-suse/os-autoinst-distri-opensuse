@@ -42,8 +42,8 @@ sub run {
         my %rsc_not_exists = ();
         # Stop all affected resources, and remove clvm resource from cluster
         for my $rsc (qw(fs_cluster_md vg_cluster_md cluster_md clvm clvmd)) {
-            $rsc_not_exists{$rsc} = script_run "crm resource stop $rsc";
-            assert_script_run "crm configure delete $rsc" if ($rsc =~ /clvm/ && !$rsc_not_exists{$rsc});
+            $rsc_not_exists{$rsc} = script_run "yes | crm resource stop $rsc";
+            assert_script_run "yes | crm configure delete $rsc" if ($rsc =~ /clvm/ && !$rsc_not_exists{$rsc});
         }
 
         # With clvm resource removed from the cluster, configure lvmlockd
@@ -58,7 +58,7 @@ sub run {
         save_state;
 
         # Restart cluster_md
-        assert_script_run 'crm resource start cluster_md' unless $rsc_not_exists{cluster_md};
+        assert_script_run 'yes | crm resource start cluster_md' unless $rsc_not_exists{cluster_md};
         sleep 5;
 
         # Migrate volume group to lvmlockd
@@ -68,8 +68,8 @@ sub run {
         }
 
         # Start volume group and filesystem resources
-        assert_script_run 'crm resource start vg_cluster_md' unless $rsc_not_exists{vg_cluster_md};
-        assert_script_run 'crm resource start fs_cluster_md' unless $rsc_not_exists{fs_cluster_md};
+        assert_script_run 'yes | crm resource start vg_cluster_md' unless $rsc_not_exists{vg_cluster_md};
+        assert_script_run 'yes | crm resource start fs_cluster_md' unless $rsc_not_exists{fs_cluster_md};
         sleep 5;
         save_state;
     }
